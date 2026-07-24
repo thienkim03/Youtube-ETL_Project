@@ -1,124 +1,202 @@
-# Ecommerce Data Pipeline — Tổng quan Project
+# YouTube ETL Project
 
-## 1. Mục tiêu
+## 1. Project Overview
 
+This project demonstrates a simple ETL (Extract, Transform, Load) pipeline using Python and SQL Server.
 
-Theo dõi và phân tích dữ liệu sản phẩm từ các shop bán hàng trên **Shopee** và **TikTok Shop**, nhằm:
-- Theo dõi biến động giá / lượt bán / rating theo thời gian
-- Phân tích tổng quan ngành hàng: sản phẩm nào bán tốt, shop nào dẫn đầu
-- Cung cấp dashboard trực quan (Power BI) để ra quyết định nhanh
+The pipeline extracts video metadata from YouTube, transforms the raw data into a clean and structured format, then loads the processed data into SQL Server for further analysis.
 
-## 2. Phạm vi dữ liệu
+---
 
-| Hạng mục | Chi tiết |
-|---|---|
-| Sàn TMĐT | Shopee, TikTok Shop |
-| Input | Danh sách link **shop** (không phải link sản phẩm lẻ) |
-| Trường dữ liệu lấy | Tên sản phẩm, giá, lượt bán (sold), số lượt review, số sao (rating), thông tin shop |
-| Tần suất cào | Hàng ngày (daily) |
-| Quy mô | Nhỏ — vài shop, tối đa ~200 sản phẩm/shop |
+## 2. Objectives
 
-> _(Insert thêm: số lượng shop cụ thể đang theo dõi, ngành hàng tập trung, ngày bắt đầu thu thập dữ liệu...)_
+- Build a complete ETL pipeline using Python and SQL Server
+- Extract YouTube video metadata automatically
+- Clean and standardize the extracted data
+- Load the processed dataset into SQL Server
+- Create a reusable and maintainable data pipeline
 
-## 3. Kiến trúc Workflow
+---
 
+## 3. Data Source
+
+| Item | Description |
+|------|-------------|
+| Source | YouTube |
+| Input | YouTube video URLs |
+| Extraction Tool | Python |
+| Output | CSV |
+
+### Example Fields
+
+| Field | Description |
+|------|-------------|
+| Video ID | Unique identifier of the video |
+| Video Title | Video title |
+| Channel Name | Name of the YouTube channel |
+| Publish Date | Date the video was published |
+| Video URL | Original YouTube video URL |
+| Duration | Video duration |
+| View Count | Number of views |
+| Like Count | Number of likes |
+| Comment Count | Number of comments |
+| Tags | Video tags |
+| Category | Video category |
+| Thumbnail URL | Thumbnail image URL |
+| Collection Date | Date when the data was extracted |
+
+---
+
+## 4. Project Workflow
+
+```text
+YouTube
+    │
+    ▼
+Python (Extract)
+    │
+    ▼
+data/raw/raw_youtube_YYYYMMDD.csv
+    │
+    ▼
+Python (Transform)
+• Remove duplicates
+• Handle missing values
+• Convert data types
+• Rename columns
+• Standardize formats
+    │
+    ▼
+data/processed/cleaned_youtube_YYYYMMDD.csv
+    │
+    ▼
+SQL Server (Load)
+    │
+    ▼
+dbo.video_statistics
 ```
-config/shops.xlsx (danh sách link shop)
-        │
-        ▼
-┌─────────────────────┐     ┌─────────────────────┐
-│   Scrape Shopee      │     │  Scrape TikTok Shop  │
-│   (Playwright)       │     │   (Playwright)       │
-└──────────┬───────────┘     └──────────┬───────────┘
-           │                            │
-           ▼                            ▼
-   raw_shopee.csv                raw_tiktok.csv
-           │                            │
-           └─────────────┬──────────────┘
-                          ▼
-              ┌───────────────────────┐
-              │  Python xử lý (pandas) │
-              │  Clean, gộp 2 sàn,     │
-              │  chuẩn hoá schema      │
-              └───────────┬───────────┘
-                          ▼
-              cleaned_products.xlsx / .csv
-                          │
-                          ▼
-      ┌──────────────────────────────────────┐
-      │         SQL Server (SSMS 21)          │
-      │                                        │
-      │   Bronze layer                         │
-      │   → dữ liệu thô, append theo ngày      │
-      │              ▼                         │
-      │   Silver layer                         │
-      │   → làm sạch, đúng kiểu dữ liệu, dedupe│
-      │              ▼                         │
-      │   Gold layer                           │
-      │   → bảng tổng hợp: xu hướng giá,       │
-      │     ranking sản phẩm                   │
-      └──────────────────┬─────────────────────┘
-                          ▼
-                Power BI Dashboard
-              (xu hướng giá, top sản phẩm)
+
+---
+
+## 5. Project Structure
+
+```text
+Youtube-ETL_Project/
+│
+├── data/
+│   ├── raw/
+│   └── processed/
+│
+├── scripts/
+│   ├── extract.py
+│   ├── transform.py
+│   ├── load.py
+│   └── run_pipeline.py
+│
+├── sql/
+│   └── create_tables.sql
+│
+├── requirements.txt
+├── .gitignore
+└── README.md
 ```
 
-> _(Có thể chèn ảnh sơ đồ trực quan vào đây sau, ví dụ: `![workflow](./docs/workflow.png`)_
+---
 
-## 4. Chi tiết từng giai đoạn
+## 6. ETL Process
 
-### 4.1. Thu thập dữ liệu (Scraping)
-- Công cụ: Playwright (Python)
-- Input: `config/shops.xlsx`
-- Output: `data/raw/raw_shopee_YYYYMMDD.csv`, `data/raw/raw_tiktok_YYYYMMDD.csv`
+### 6.1 Extract
 
-> _(Insert thêm: các trường hợp edge-case đã gặp, cách xử lý chống bot, giới hạn đã biết...)_
+**Tool:** Python
 
-### 4.2. Xử lý dữ liệu (Transform)
-- Công cụ: Python (pandas)
-- Việc cần làm: ép kiểu số (giá, lượt bán...), chuẩn hoá tên cột giữa 2 sàn, loại bỏ trùng lặp
-- Output: `data/processed/cleaned_products_YYYYMMDD.xlsx/csv`
+The extraction script collects video metadata from YouTube and stores the raw dataset in CSV format.
 
-> _(Insert thêm: các rule làm sạch cụ thể đã áp dụng, ví dụ cách convert "1,2 Tr" → 1200000)_
+**Output**
 
-### 4.3. Mô hình dữ liệu (Bronze / Silver / Gold)
+```text
+data/raw/raw_youtube_YYYYMMDD.csv
+```
 
-| Layer | Vai trò | Bảng chính |
-|---|---|---|
-| Bronze | Lưu nguyên trạng dữ liệu thô theo từng ngày, không sửa/xoá | `bronze.shop_products_raw` |
-| Silver | Dữ liệu đã làm sạch, đúng kiểu, sẵn sàng truy vấn | `silver.shop_products` |
-| Gold | Bảng tổng hợp phục vụ trực tiếp cho BI | `gold.price_trend`, `gold.shop_ranking` |
+---
 
-> _(Insert thêm: schema chi tiết từng bảng, các business rule tính toán ở Gold layer)_
+### 6.2 Transform
 
-### 4.4. Trực quan hoá (Power BI)
-- Nguồn dữ liệu: kết nối trực tiếp tới các bảng Gold trên SQL Server
-- Các dashboard dự kiến:
+**Tool:** pandas
 
-> _(Insert thêm: danh sách cụ thể các trang/dashboard, ví dụ: "Trang 1 — Tổng quan giá theo ngày", "Trang 2 — So sánh shop"...)_
+The transformation process includes:
 
-## 5. Tự động hoá
+- Removing duplicate records
+- Handling missing values
+- Converting data types
+- Formatting dates
+- Renaming columns
+- Standardizing text values
 
-| Thành phần | Công cụ |
-|---|---|
-| Lập lịch chạy | Windows Task Scheduler |
-| Script điều phối | `run_pipeline.bat` |
-| Versioning code | Git + GitHub (chỉ push code, không push data) |
+**Output**
 
-> _(Insert thêm: giờ chạy cụ thể, cách xử lý khi 1 bước lỗi giữa pipeline, cách nhận thông báo khi pipeline fail...)_
+```text
+data/processed/cleaned_youtube_YYYYMMDD.csv
+```
 
-## 6. Vấn đề đã biết / Rủi ro
+---
 
-> _(Khung để ghi lại các vấn đề gặp phải theo thời gian, ví dụ:)_
+### 6.3 Load
 
-- Shopee/TikTok Shop có cơ chế chống bot — có thể gặp captcha hoặc bị chặn tạm thời nếu cào quá nhanh/nhiều
-- Cấu trúc HTML/JSON nội bộ của các sàn có thể thay đổi theo thời gian, cần kiểm tra lại selector/regex định kỳ
-- _(thêm các vấn đề khác khi gặp phải)_
+**Tool:** SQL Server
 
-## 7. Lịch sử thay đổi
+The cleaned dataset is loaded into SQL Server for storage and future analysis.
 
-> _(Khung changelog, cập nhật dần theo thời gian)_
+Database
 
-| Ngày | Thay đổi |
-|---|---|
-| _(YYYY-MM-DD)_ | Khởi tạo project, thiết kế kiến trúc tổng thể |
+```text
+YouTubeDB
+```
+
+Table
+
+```text
+dbo.video_statistics
+```
+
+---
+
+## 7. Technologies
+
+| Category | Technology |
+|----------|------------|
+| Programming Language | Python |
+| Data Processing | pandas |
+| Storage | CSV |
+| Database | SQL Server |
+| Database Connector | pyodbc / SQLAlchemy |
+| Version Control | Git & GitHub |
+
+---
+
+## 8. Future Improvements
+
+- Automate the pipeline using Windows Task Scheduler
+- Support incremental loading
+- Add logging and error handling
+- Build Power BI dashboards
+- Containerize the project using Docker
+
+---
+
+## 9. Project Status
+
+✅ Extract completed
+
+✅ Transform completed
+
+✅ Load completed
+
+🚧 Dashboard and scheduling planned for future versions
+
+---
+
+## 10. Author
+
+**Kim Vu Thien**
+
+Data Analyst | Python | SQL | ETL
