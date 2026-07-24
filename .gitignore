@@ -1,53 +1,18 @@
-# ============================================================
-# DATA & LOGS - khong push len GitHub (data co the lon, nhay cam,
-# hoac thay doi hang ngay -> khong can versioning bang git)
-# ============================================================
+# API keys / secrets - KHÔNG commit file này lên Git
+.env
+
+# Data files (raw/processed) - thường không cần push data lên GitHub
 data/raw/*
 data/processed/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
-logs/*
-!logs/.gitkeep
 
-# ============================================================
-# PYTHON
-# ============================================================
+# Python
 __pycache__/
 *.pyc
-*.pyo
 .venv/
 venv/
-env/
 
-# ============================================================
-# THONG TIN NHAY CAM - KHONG BAO GIO push len GitHub
-# (password, connection string thuc, API key...)
-# ============================================================
-.env
-*.env
-config/local_settings.py
-
-# ============================================================
-# OS / EDITOR
-# ============================================================
-.DS_Store
-Thumbs.db
-desktop.ini
+# IDE
 .vscode/
-*.swp
-
-# ============================================================
-# PLAYWRIGHT (browser cache - khong can push, may khac tu cai lai)
-# ============================================================
-.cache/
-ms-playwright/
-
-# ============================================================
-# FILE TAM CUA EXCEL/WORD KHI DANG MO (bat dau bang ~$)
-# ============================================================
-~$*.xlsx
-~$*.docx
-
-# LUU Y: config/shops.xlsx VAN duoc push (khong nam trong danh sach loai tru
-# o tren) vi day la file CAU HINH (danh sach shop theo doi), khong phai
-# data ket qua scrape.
+.idea/
