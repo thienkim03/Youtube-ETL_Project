@@ -1,14 +1,18 @@
 """
 extract.py
 ----------
-Kéo dữ liệu video YouTube theo từ khóa, có filter khoảng thời gian đăng video.
-Lấy đủ các field theo README của project Youtube-ETL_Project, cộng thêm Channel ID + Subscriber Count:
+Kéo dữ liệu video YouTube theo (nhiều) từ khóa, filter trong tháng hiện tại.
+Chỉ xuất ra CSV. Gom dữ liệu theo THÁNG: nếu chạy nhiều lần trong cùng
+1 tháng (nhiều ngày, nhiều keyword khác nhau), dữ liệu sẽ được APPEND
+vào cùng 1 file duy nhất của tháng đó thay vì tạo file mới mỗi lần chạy.
+
+Field lấy:
     Video ID, Video Title, Channel ID, Channel Name, Subscriber Count, Publish Date,
     Video URL, Duration, View Count, Like Count, Comment Count, Tags, Category,
-    Thumbnail URL, Collection Date
+    Thumbnail URL, Keyword, Collection Date
 
 Yêu cầu:
-    pip install requests openpyxl python-dotenv
+    pip install requests python-dotenv
 
 Cách lấy API Key:
     1. Vào https://console.cloud.google.com/
@@ -20,7 +24,11 @@ Cách lấy API Key:
        (file .env đã được thêm vào .gitignore, không bị đẩy lên GitHub)
 
 Cách chạy:
+    # 1 keyword
     python extract.py --keyword "data analyst" --max-results 100
+
+    # nhiều keyword cùng lúc (cách nhau bằng dấu phẩy)
+    python extract.py --keyword "data analyst,data engineer,business analyst" --max-results 100
 """
 
 import os
@@ -29,33 +37,60 @@ import argparse
 import datetime as dt
 import time
 import requests
-from openpyxl import Workbook
-from openpyxl.utils import get_column_letter
 from dotenv import load_dotenv
 
 # Đọc file .env (nếu có) và nạp vào biến môi trường của process hiện tại.
 # File .env KHÔNG được commit lên Git (đã thêm vào .gitignore).
-load_dotenv()
+load_dotenv(override=True)
 
 # ============================================================
 # CONFIG - SỬA CÁC GIÁ TRỊ Ở ĐÂY, KHÔNG CẦN TRUYỀN THAM SỐ DÒNG LỆNH
 # Nếu muốn chạy kiểu "python extract.py" trực tiếp trong VS Code / IDE
-# thì chỉ cần sửa 4 dòng bên dưới rồi bấm Run.
+# thì chỉ cần sửa các dòng bên dưới rồi bấm Run.
 # ============================================================
-KEYWORD = "data analyst"          # từ khóa / chủ đề muốn theo dõi
+# Thư mục chứa chính file script này -> dùng làm nơi xuất CSV mặc định.
+# Cách này KHÔNG phụ thuộc vào việc bạn đứng ở đâu (cwd) khi chạy lệnh python,
+# luôn xuất ra đúng "cái folder đang chứa yt_extract.py", tránh lỗi path tương
+# đối ../data sai chỗ tuỳ theo cách chạy (terminal, notebook, VS Code Run...).
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-_user_input = input("Hãy nhập số video bạn muốn lấy (Enter để dùng mặc định 100): ").strip()
-MAX_RESULTS = int(_user_input) if _user_input else 100   # số lượng video muốn lấy
-
-OUTPUT_DIR = "data/raw"           # thư mục lưu file CSV
+KEYWORDS = ["data analyst"]       # danh sách chủ đề muốn theo dõi, có thể thêm nhiều: ["data analyst", "data engineer"]
+MAX_RESULTS = 100                 # số lượng video muốn lấy CHO MỖI keyword
+OUTPUT_DIR = os.path.join(SCRIPT_DIR, "data", "raw")  # luôn ra đúng <folder_script>/data/raw, không phụ thuộc cwd lúc chạy
 # ============================================================
 
 SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
 VIDEOS_URL = "https://www.googleapis.com/youtube/v3/videos"
 CHANNELS_URL = "https://www.googleapis.com/youtube/v3/channels"
 
+FIELDNAMES = [
+    "video_id",
+    "video_title",
+    "channel_id",
+    "channel_name",
+    "subscriber_count",
+    "publish_date",
+    "video_url",
+    "duration",
+    "view_count",
+    "like_count",
+    "comment_count",
+    "tags",
+    "category",
+    "thumbnail_url",
+    "keyword",
+    "collection_date",
+]
+
 # cache subscriber_count theo channel_id, tránh gọi API trùng lặp cho cùng 1 kênh
 CHANNEL_STATS_CACHE = {}
+# map category_id -> tên category (YouTube trả về id số, cần map sang tên)
+CATEGORY_CACHE = {}
+
+
+def parse_keywords(raw: str) -> list:
+    """Tách chuỗi keyword cách nhau bằng dấu phẩy thành list, bỏ khoảng trắng thừa."""
+    return [k.strip() for k in raw.split(",") if k.strip()]
 
 
 def get_channel_stats(channel_ids: list, api_key: str) -> dict:
@@ -76,7 +111,6 @@ def get_channel_stats(channel_ids: list, api_key: str) -> dict:
         for item in data.get("items", []):
             channel_id = item.get("id")
             stats = item.get("statistics", {})
-            # hiddenSubscriberCount = True nghĩa là kênh đó ẩn số subscriber công khai
             if stats.get("hiddenSubscriberCount"):
                 CHANNEL_STATS_CACHE[channel_id] = "hidden"
             else:
@@ -85,9 +119,6 @@ def get_channel_stats(channel_ids: list, api_key: str) -> dict:
         time.sleep(0.2)
 
     return CHANNEL_STATS_CACHE
-
-# map category_id -> tên category (YouTube trả về id số, cần map sang tên)
-CATEGORY_CACHE = {}
 
 
 def get_api_key():
@@ -101,13 +132,11 @@ def get_api_key():
 
 
 def to_rfc3339(date_str: str, end_of_day: bool = False) -> str:
-    """Chuyển 'YYYY-MM-DD' sang định dạng RFC3339 mà YouTube API yêu cầu."""
     time_part = "T23:59:59Z" if end_of_day else "T00:00:00Z"
     return f"{date_str}{time_part}"
 
 
 def parse_duration(iso_duration: str) -> str:
-    """Chuyển ISO 8601 duration (PT#H#M#S) sang dạng HH:MM:SS."""
     import re
     match = re.match(
         r"P(?:(?P<days>\d+)D)?T?(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?(?:(?P<seconds>\d+)S)?",
@@ -124,7 +153,6 @@ def parse_duration(iso_duration: str) -> str:
 
 
 def get_category_map(api_key: str, region_code: str = "VN") -> dict:
-    """Lấy map category_id -> category_name (cache lại để đỡ gọi API nhiều lần)."""
     if CATEGORY_CACHE:
         return CATEGORY_CACHE
     url = "https://www.googleapis.com/youtube/v3/videoCategories"
@@ -154,7 +182,7 @@ def search_video_ids(
             "type": "video",
             "maxResults": min(50, max_results - len(video_ids)),
             "key": api_key,
-            "order": "viewCount",  # ưu tiên video nhiều view lên trước (thay vì relevance)
+            "order": "viewCount",
         }
         if published_after:
             params["publishedAfter"] = to_rfc3339(published_after)
@@ -164,6 +192,14 @@ def search_video_ids(
             params["pageToken"] = page_token
 
         resp = requests.get(SEARCH_URL, params=params)
+        if not resp.ok:
+            try:
+                err_json = resp.json()
+                err_msg = err_json.get("error", {}).get("message", "")
+                err_reason = err_json.get("error", {}).get("errors", [{}])[0].get("reason", "")
+                print(f"   [LỖI API] Status {resp.status_code} | reason={err_reason} | message={err_msg}", flush=True)
+            except Exception:
+                print(f"   [LỖI API] Status {resp.status_code}: {resp.text}", flush=True)
         resp.raise_for_status()
         data = resp.json()
 
@@ -173,18 +209,17 @@ def search_video_ids(
         page_token = data.get("nextPageToken")
         if not page_token:
             break
-        time.sleep(0.2)  # tránh gọi API quá dồn dập
+        time.sleep(0.2)
 
     return video_ids[:max_results]
 
 
-def get_video_details(video_ids: list, api_key: str) -> list:
+def get_video_details(video_ids: list, api_key: str, keyword: str) -> list:
     """Gọi videos.list để lấy full metadata (snippet + statistics + contentDetails)."""
     records = []
     category_map = get_category_map(api_key)
     collection_date = dt.datetime.now().strftime("%Y-%m-%d")
 
-    # API chỉ cho tối đa 50 id / request
     for i in range(0, len(video_ids), 50):
         chunk = video_ids[i : i + 50]
         params = {
@@ -215,54 +250,65 @@ def get_video_details(video_ids: list, api_key: str) -> list:
                 "comment_count": int(stats.get("commentCount", 0) or 0),
                 "tags": "|".join(snippet.get("tags", [])),
                 "category": category_map.get(snippet.get("categoryId", ""), "Unknown"),
-                "thumbnail_url": snippet.get("thumbnails", {})
-                .get("high", {})
-                .get("url", ""),
+                "thumbnail_url": snippet.get("thumbnails", {}).get("high", {}).get("url", ""),
+                "keyword": keyword,
                 "collection_date": collection_date,
             }
             records.append(record)
 
         time.sleep(0.2)
 
-    # Lấy subscriber_count cho tất cả channel_id xuất hiện trong records (gọi 1 lần theo batch,
-    # không gọi lặp lại cho cùng 1 kênh dù kênh đó có nhiều video trong kết quả).
     channel_ids = [r["channel_id"] for r in records if r["channel_id"]]
     channel_stats = get_channel_stats(channel_ids, api_key)
     for r in records:
         sub_count = channel_stats.get(r["channel_id"], "Unknown")
-        # Giữ nguyên "hidden"/"Unknown" dạng text vì đây không phải số thật,
-        # còn lại convert sang int để Excel/CSV nhận đúng kiểu số.
         r["subscriber_count"] = sub_count if sub_count in ("hidden", "Unknown") else int(sub_count)
 
     return records
 
 
-def save_to_csv(records: list, output_dir: str = "data/raw") -> str:
+# Bảng tên tháng viết tắt cố định (không dùng strftime %b vì phụ thuộc locale
+# của máy - nếu Windows set locale tiếng Việt thì %b sẽ ra "Th01" thay vì "Jan").
+MONTH_ABBR = {
+    1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
+    7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec",
+}
+
+
+def get_monthly_filepath(output_dir: str) -> str:
+    """File output đặt tên theo THÁNG dạng 'raw_youtube_Jan_2026.csv', không theo
+    ngày -> nhiều lần chạy trong cùng 1 tháng sẽ cùng ghi/gộp vào đúng 1 file duy
+    nhất (khác tháng thì tên tự khác nhau, không bao giờ trùng tên giữa các tháng)."""
     os.makedirs(output_dir, exist_ok=True)
-    today_str = dt.datetime.now().strftime("%Y%m%d")
-    filepath = os.path.join(output_dir, f"raw_youtube_{today_str}.csv")
+    now = dt.datetime.now()
+    month_str = f"{MONTH_ABBR[now.month]}_{now.year}"
+    return os.path.join(output_dir, f"raw_youtube_{month_str}.csv")
 
-    fieldnames = [
-        "video_id",
-        "video_title",
-        "channel_id",
-        "channel_name",
-        "subscriber_count",
-        "publish_date",
-        "video_url",
-        "duration",
-        "view_count",
-        "like_count",
-        "comment_count",
-        "tags",
-        "category",
-        "thumbnail_url",
-        "collection_date",
-    ]
 
+def load_existing_records(filepath: str) -> list:
+    """Đọc dữ liệu đã có sẵn trong file tháng (nếu file đã tồn tại từ lần chạy trước)."""
+    if not os.path.exists(filepath):
+        return []
+    with open(filepath, "r", newline="", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        return list(reader)
+
+
+def merge_and_dedupe(existing: list, new_records: list) -> list:
+    """Gộp dữ liệu cũ + mới, dedupe theo (video_id, keyword, collection_date).
+    Nếu trùng key -> giữ bản MỚI (ghi đè view/like/comment cập nhật hơn).
+    Nếu khác collection_date (chạy khác ngày trong tháng) -> giữ cả hai, tạo lịch sử."""
+    merged = {}
+    for r in existing + new_records:
+        key = (r["video_id"], r["keyword"], r["collection_date"])
+        merged[key] = r  # ghi đè -> bản xuất hiện sau (new_records) thắng nếu trùng key
+    return list(merged.values())
+
+
+def save_to_csv(records: list, filepath: str) -> str:
     try:
         with open(filepath, "w", newline="", encoding="utf-8-sig") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
             writer.writeheader()
             writer.writerows(records)
     except PermissionError:
@@ -270,103 +316,63 @@ def save_to_csv(records: list, output_dir: str = "data/raw") -> str:
             f"Không ghi được file '{filepath}' vì đang bị khóa. "
             f"Khả năng cao file này đang MỞ trong Excel/chương trình khác — hãy đóng lại rồi chạy lại script."
         )
-
     return filepath
 
 
-def save_to_excel(records: list, output_dir: str = "data/raw") -> str:
-    """Xuất ra file .xlsx, đọc trực tiếp bằng Excel không bị lỗi font/encoding như CSV."""
-    os.makedirs(output_dir, exist_ok=True)
-    today_str = dt.datetime.now().strftime("%Y%m%d")
-    filepath = os.path.join(output_dir, f"raw_youtube_{today_str}.xlsx")
+def run_for_keyword(keyword: str, api_key: str, max_results: int, published_after: str, published_before: str) -> list:
+    print(f"\n--- Keyword: '{keyword}' ---")
+    print(f"[1/2] Đang search video trong khoảng {published_after} -> {published_before} ...")
+    video_ids = search_video_ids(
+        keyword=keyword,
+        api_key=api_key,
+        published_after=published_after,
+        published_before=published_before,
+        max_results=max_results,
+    )
+    print(f"   -> Tìm được {len(video_ids)} video")
 
-    fieldnames = [
-        "video_id",
-        "video_title",
-        "channel_id",
-        "channel_name",
-        "subscriber_count",
-        "publish_date",
-        "video_url",
-        "duration",
-        "view_count",
-        "like_count",
-        "comment_count",
-        "tags",
-        "category",
-        "thumbnail_url",
-        "collection_date",
-    ]
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "video_statistics"
-
-    # header
-    ws.append(fieldnames)
-
-    # data rows
-    for record in records:
-        ws.append([record.get(field, "") for field in fieldnames])
-
-    # auto-fit độ rộng cột (ước lượng theo độ dài text dài nhất trong cột)
-    for col_idx, field in enumerate(fieldnames, start=1):
-        max_len = len(field)
-        for record in records:
-            value = str(record.get(field, ""))
-            max_len = max(max_len, len(value))
-        col_letter = get_column_letter(col_idx)
-        ws.column_dimensions[col_letter].width = min(max_len + 2, 60)
-
-    try:
-        wb.save(filepath)
-    except PermissionError:
-        raise PermissionError(
-            f"Không ghi được file '{filepath}' vì đang bị khóa. "
-            f"Khả năng cao file này đang MỞ trong Excel — hãy đóng file lại rồi chạy lại script."
-        )
-    return filepath
+    print("[2/2] Đang lấy chi tiết metadata ...")
+    records = get_video_details(video_ids, api_key, keyword)
+    return records
 
 
 def main():
-    # Dùng argparse chỉ để cho phép override CONFIG ở trên nếu muốn chạy qua dòng lệnh.
-    # Nếu không truyền gì cả (vd bấm Run trong IDE), script sẽ tự dùng giá trị trong CONFIG.
-    parser = argparse.ArgumentParser(description="Kéo dữ liệu YouTube theo từ khóa, lọc video trong tháng hiện tại")
-    parser.add_argument("--keyword", default=KEYWORD, help="Từ khóa / chủ đề muốn theo dõi")
-    parser.add_argument("--max-results", type=int, default=MAX_RESULTS, help="Số lượng video muốn lấy")
-    parser.add_argument("--output-dir", default=OUTPUT_DIR, help="Thư mục lưu file CSV output")
+    parser = argparse.ArgumentParser(description="Kéo dữ liệu YouTube theo nhiều từ khóa, gom output theo tháng")
+    parser.add_argument("--keyword", default=",".join(KEYWORDS),
+                         help="Một hoặc nhiều từ khóa, cách nhau bằng dấu phẩy. VD: \"data analyst,data engineer\"")
+    parser.add_argument("--max-results", type=int, default=MAX_RESULTS, help="Số lượng video muốn lấy MỖI keyword")
+    parser.add_argument("--output-dir", default=OUTPUT_DIR, help="Thư mục lưu file CSV output (mặc định: <folder_script>/data/raw)")
     args = parser.parse_args()
+
+    keywords = parse_keywords(args.keyword)
+    if not keywords:
+        raise ValueError("Không có keyword nào hợp lệ. Kiểm tra lại --keyword.")
 
     api_key = get_api_key()
 
-    # Tính khung thời gian ĐỘNG: luôn là "từ ngày 1 của tháng hiện tại -> hôm nay".
-    # Chạy ngày nào trong tháng cũng tự động lấy đúng phạm vi tháng đó, không cần sửa tay.
     today = dt.datetime.now()
     published_after = today.replace(day=1).strftime("%Y-%m-%d")
     published_before = today.strftime("%Y-%m-%d")
 
-    print(f"[1/3] Đang search video với keyword='{args.keyword}', "
-          f"trong tháng {today.month}/{today.year} ({published_after} -> {published_before}) ...")
-    video_ids = search_video_ids(
-        keyword=args.keyword,
-        api_key=api_key,
-        published_after=published_after,
-        published_before=published_before,
-        max_results=args.max_results,
-    )
-    print(f"   -> Tìm được {len(video_ids)} video")
+    print(f"Sẽ cào {len(keywords)} keyword: {keywords}")
 
-    print("[2/3] Đang lấy chi tiết metadata cho từng video ...")
-    records = get_video_details(video_ids, api_key)
+    all_new_records = []
+    for kw in keywords:
+        records = run_for_keyword(kw, api_key, args.max_results, published_after, published_before)
+        all_new_records.extend(records)
 
-    # Sort lại theo view_count thật (từ videos.list, chính xác hơn số view ước lượng
-    # lúc search), để video "lọt top view" nằm lên đầu danh sách.
-    records.sort(key=lambda r: int(r.get("view_count", 0) or 0), reverse=True)
+    # Sort theo view_count giảm dần trong từng lần chạy
+    all_new_records.sort(key=lambda r: int(r.get("view_count", 0) or 0), reverse=True)
 
-    print("[3/3] Đang lưu ra CSV và Excel ...")
-    csv_path = save_to_csv(records, args.output_dir)
-    xlsx_path = save_to_excel(records, args.output_dir)
-    print(f"   -> Đã lưu {len(records)} dòng vào:\n      CSV : {csv_path}\n      Excel: {xlsx_path}")
+    filepath = get_monthly_filepath(args.output_dir)
+    existing_records = load_existing_records(filepath)
+    if existing_records:
+        print(f"\n[GOM THÁNG] File '{filepath}' đã có {len(existing_records)} dòng từ lần chạy trước, đang gộp thêm ...")
+
+    merged_records = merge_and_dedupe(existing_records, all_new_records)
+
+    save_to_csv(merged_records, filepath)
+    print(f"\n✅ Hoàn tất. File tháng hiện có tổng {len(merged_records)} dòng: {filepath}")
 
 
 if __name__ == "__main__":
