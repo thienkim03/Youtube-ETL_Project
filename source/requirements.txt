@@ -4,3 +4,4 @@ openpyxl
 pandas
 SQLAlchemy
 PyMySQL
+matplotlib.pyplot
