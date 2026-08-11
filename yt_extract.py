@@ -35,6 +35,7 @@ import os
 import csv
 import argparse
 import datetime as dt
+import calendar
 import time
 import requests
 from dotenv import load_dotenv
@@ -275,13 +276,23 @@ MONTH_ABBR = {
 }
 
 
-def get_monthly_filepath(output_dir: str) -> str:
+def get_month_range(year: int, month: int) -> tuple[str, str]:
+    """Trả về ngày đầu và cuối tháng dạng YYYY-MM-DD để truyền vào YouTube API."""
+    if month not in MONTH_ABBR:
+        raise ValueError("month must be between 1 and 12")
+
+    last_day = calendar.monthrange(year, month)[1]
+    published_after = dt.date(year, month, 1).strftime("%Y-%m-%d")
+    published_before = dt.date(year, month, last_day).strftime("%Y-%m-%d")
+    return published_after, published_before
+
+
+def get_monthly_filepath(output_dir: str, year: int, month: int) -> str:
     """File output đặt tên theo THÁNG dạng 'raw_youtube_Jan_2026.csv', không theo
     ngày -> nhiều lần chạy trong cùng 1 tháng sẽ cùng ghi/gộp vào đúng 1 file duy
     nhất (khác tháng thì tên tự khác nhau, không bao giờ trùng tên giữa các tháng)."""
     os.makedirs(output_dir, exist_ok=True)
-    now = dt.datetime.now()
-    month_str = f"{MONTH_ABBR[now.month]}_{now.year}"
+    month_str = f"{MONTH_ABBR[month]}_{year}"
     return os.path.join(output_dir, f"raw_youtube_{month_str}.csv")
 
 
@@ -342,6 +353,8 @@ def main():
                          help="Một hoặc nhiều từ khóa, cách nhau bằng dấu phẩy. VD: \"data analyst,data engineer\"")
     parser.add_argument("--max-results", type=int, default=MAX_RESULTS, help="Số lượng video muốn lấy MỖI keyword")
     parser.add_argument("--output-dir", default=OUTPUT_DIR, help="Thư mục lưu file CSV output (mặc định: <folder_script>/data/raw)")
+    parser.add_argument("--year", type=int, help="Năm muốn lấy dữ liệu. VD: 2026")
+    parser.add_argument("--month", type=int, help="Tháng muốn lấy dữ liệu, từ 1 đến 12")
     args = parser.parse_args()
 
     keywords = parse_keywords(args.keyword)
@@ -350,11 +363,15 @@ def main():
 
     api_key = get_api_key()
 
-    today = dt.datetime.now()
-    published_after = today.replace(day=1).strftime("%Y-%m-%d")
-    published_before = today.strftime("%Y-%m-%d")
+    if args.year is None:
+        args.year = int(input("Enter the year (YYYY): "))
+    if args.month is None:
+        args.month = int(input("Enter the month (1-12): "))
+
+    published_after, published_before = get_month_range(args.year, args.month)
 
     print(f"Sẽ cào {len(keywords)} keyword: {keywords}")
+    print(f"Khoảng thời gian: {published_after} -> {published_before}")
 
     all_new_records = []
     for kw in keywords:
@@ -364,7 +381,7 @@ def main():
     # Sort theo view_count giảm dần trong từng lần chạy
     all_new_records.sort(key=lambda r: int(r.get("view_count", 0) or 0), reverse=True)
 
-    filepath = get_monthly_filepath(args.output_dir)
+    filepath = get_monthly_filepath(args.output_dir, args.year, args.month)
     existing_records = load_existing_records(filepath)
     if existing_records:
         print(f"\n[GOM THÁNG] File '{filepath}' đã có {len(existing_records)} dòng từ lần chạy trước, đang gộp thêm ...")
@@ -372,7 +389,13 @@ def main():
     merged_records = merge_and_dedupe(existing_records, all_new_records)
 
     save_to_csv(merged_records, filepath)
+
+    latest_raw_path = os.path.join(args.output_dir, "latest_raw_path.txt")
+    with open(latest_raw_path, "w", encoding="utf-8") as f:
+        f.write(filepath)
+
     print(f"\n✅ Hoàn tất. File tháng hiện có tổng {len(merged_records)} dòng: {filepath}")
+    print(f"Latest raw path saved to: {latest_raw_path}")
 
 
 if __name__ == "__main__":
